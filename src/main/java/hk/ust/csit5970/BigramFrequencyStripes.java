@@ -1,24 +1,14 @@
 package hk.ust.csit5970;
 
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.Map;
+import java.util.*;
 
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.CommandLineParser;
-import org.apache.commons.cli.GnuParser;
-import org.apache.commons.cli.HelpFormatter;
-import org.apache.commons.cli.OptionBuilder;
-import org.apache.commons.cli.Options;
-import org.apache.commons.cli.ParseException;
+import org.apache.commons.cli.*;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.FloatWritable;
-import org.apache.hadoop.io.IntWritable;
-import org.apache.hadoop.io.LongWritable;
-import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
@@ -35,98 +25,141 @@ import org.apache.log4j.Logger;
 public class BigramFrequencyStripes extends Configured implements Tool {
     private static final Logger LOG = Logger.getLogger(BigramFrequencyStripes.class);
 
-    /*
+    /**
+     * Custom Writable class extending HashMap for storing word counts
+     * Key: String (neighbor word)
+     * Value: IntWritable (count)
+     */
+    public static class HashMapStringIntWritable extends HashMap<String, IntWritable> {
+        /**
+         * Increments the count for a specific key
+         * @param key The word to increment
+         * @param value The value to add
+         */
+        public void increment(String key, int value) {
+            if (containsKey(key)) {
+                get(key).set(get(key).get() + value);
+            } else {
+                put(key, new IntWritable(value));
+            }
+        }
+
+        /**
+         * Increments the count by 1 for a specific key
+         * @param key The word to increment
+         */
+        public void increment(String key) {
+            increment(key, 1);
+        }
+
+        /**
+         * Calculates the total count of all values in the map
+         * @return Sum of all integer values
+         */
+        public int getTotalCount() {
+            int total = 0;
+            for (IntWritable value : values()) {
+                total += value.get();
+            }
+            return total;
+        }
+    }
+
+    /**
      * Mapper: Creates stripes for each word pair in the input
-     * For each word A, creates a stripe with (B, 1) for each following word B
-     * Output: (wordA, stripe) where stripe contains (wordB, 1)
+     * Input: (line_offset, line_text)
+     * Output: (wordA, stripe) where stripe is a map of {wordB: count}
      */
     private static class MyMapper extends Mapper<LongWritable, Text, Text, HashMapStringIntWritable> {
-        private static final Text KEY = new Text();
-        private static final HashMapStringIntWritable STRIPE = new HashMapStringIntWritable();
+        private final Text currentWord = new Text();
+        private final HashMapStringIntWritable stripe = new HashMapStringIntWritable();
 
         @Override
         public void map(LongWritable key, Text value, Context context)
                 throws IOException, InterruptedException {
-            String line = value.toString();
-            String[] words = line.trim().split("\\s+");
+            String[] words = value.toString().trim().split("\\s+");
             for (int i = 0; i < words.length - 1; i++) {
-                String w1 = words[i];
-                String w2 = words[i + 1];
-                KEY.set(w1);
-                STRIPE.clear();
-                STRIPE.increment(w2);
-                context.write(KEY, STRIPE);
+                String wordA = words[i];
+                String wordB = words[i + 1];
+                
+                currentWord.set(wordA);
+                stripe.clear();
+                stripe.increment(wordB);
+                context.write(currentWord, stripe);
             }
         }
     }
 
-    /*
-     * Reducer: Calculates frequencies for each word pair
-     * 1. Merges all stripes for word A
-     * 2. Calculates total occurrences of A
-     * 3. Computes relative frequency for each B
-     * Output: (PairOfStrings(A,B), frequency) and (PairOfStrings(A,""), total)
+    /**
+     * Reducer: Aggregates stripes and calculates relative frequencies
+     * Input: (wordA, [stripe1, stripe2,...])
+     * Output: (PairOfStrings(wordA, ""), total_count)
+     *         (PairOfStrings(wordA, wordB), relative_frequency)
      */
     private static class MyReducer extends Reducer<Text, HashMapStringIntWritable, PairOfStrings, FloatWritable> {
-        private final static HashMapStringIntWritable SUM_STRIPES = new HashMapStringIntWritable();
-        private final static PairOfStrings BIGRAM = new PairOfStrings();
-        private final static FloatWritable FREQ = new FloatWritable();
+        private final HashMapStringIntWritable mergedStripe = new HashMapStringIntWritable();
+        private final PairOfStrings outputKey = new PairOfStrings();
+        private final FloatWritable outputValue = new FloatWritable();
 
         @Override
         public void reduce(Text key, Iterable<HashMapStringIntWritable> stripes, Context context)
                 throws IOException, InterruptedException {
-            SUM_STRIPES.clear();
+            mergedStripe.clear();
+            
+            // Merge all stripes for current word
             for (HashMapStringIntWritable stripe : stripes) {
-                for (Map.Entry<String, Integer> entry : stripe.entrySet()) {
-                    SUM_STRIPES.increment(entry.getKey(), entry.getValue());
+                for (Map.Entry<String, IntWritable> entry : stripe.entrySet()) {
+                    mergedStripe.increment(entry.getKey(), entry.getValue().get());
                 }
             }
 
-            // Calculate total count by summing all values
-            int total = 0;
-            for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
-                total += entry.getValue();
-            }
+            // Calculate total occurrences
+            int totalCount = mergedStripe.getTotalCount();
 
-            // Emit total for A
-            BIGRAM.set(key.toString(), "");
-            FREQ.set(total);
-            context.write(BIGRAM, FREQ);
+            // Emit total count for current word
+            outputKey.set(key.toString(), "");
+            outputValue.set(totalCount);
+            context.write(outputKey, outputValue);
 
-            // Emit each B's frequency
-            for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
-                String b = entry.getKey();
-                int count = entry.getValue();
-                float freq = (float) count / total;
-                BIGRAM.set(key.toString(), b);
-                FREQ.set(freq);
-                context.write(BIGRAM, FREQ);
+            // Emit relative frequencies for each neighbor
+            for (Map.Entry<String, IntWritable> entry : mergedStripe.entrySet()) {
+                String neighbor = entry.getKey();
+                int count = entry.getValue().get();
+                float frequency = (float) count / totalCount;
+                
+                outputKey.set(key.toString(), neighbor);
+                outputValue.set(frequency);
+                context.write(outputKey, outputValue);
             }
         }
     }
 
-    /*
-     * Combiner: Merges stripes for the same word locally
-     * Output: (wordA, mergedStripe) with summed counts
+    /**
+     * Combiner: Merges partial stripes locally
+     * Input: (wordA, [stripe1, stripe2,...])
+     * Output: (wordA, merged_stripe)
      */
     private static class MyCombiner extends Reducer<Text, HashMapStringIntWritable, Text, HashMapStringIntWritable> {
-        private final static HashMapStringIntWritable SUM_STRIPES = new HashMapStringIntWritable();
+        private final HashMapStringIntWritable mergedStripe = new HashMapStringIntWritable();
 
         @Override
         public void reduce(Text key, Iterable<HashMapStringIntWritable> stripes, Context context)
                 throws IOException, InterruptedException {
-            SUM_STRIPES.clear();
+            mergedStripe.clear();
+            
             for (HashMapStringIntWritable stripe : stripes) {
-                for (Map.Entry<String, Integer> entry : stripe.entrySet()) {
-                    SUM_STRIPES.increment(entry.getKey(), entry.getValue());
+                for (Map.Entry<String, IntWritable> entry : stripe.entrySet()) {
+                    mergedStripe.increment(entry.getKey(), entry.getValue().get());
                 }
             }
-            context.write(key, SUM_STRIPES);
+            context.write(key, mergedStripe);
         }
     }
 
-    public BigramFrequencyStripes() {
-    }
+    // Driver configuration remains unchanged below this line
+    // ------------------------------------------------------------------------
+    
+    public BigramFrequencyStripes() {}
 
     private static final String INPUT = "input";
     private static final String OUTPUT = "output";
