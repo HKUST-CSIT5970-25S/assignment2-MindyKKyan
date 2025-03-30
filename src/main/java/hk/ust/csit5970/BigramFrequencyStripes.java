@@ -85,7 +85,10 @@ public class BigramFrequencyStripes extends Configured implements Tool {
 			}
 
 			// Emit each bigram and its frequency
-			int totalCount = SUM_STRIPES.getTotalCount();
+			int totalCount = 0;
+			for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
+				totalCount += entry.getValue();
+			}
 			for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
 				BIGRAM.set(key.toString(), entry.getKey());
 				FREQ.set((float) entry.getValue() / totalCount);
