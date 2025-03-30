@@ -29,14 +29,17 @@ import org.apache.hadoop.util.ToolRunner;
 import org.apache.log4j.Logger;
 
 /**
- * Compute the bigram count using the "stripes" approach
+ * Compute the bigram frequency using the "stripes" approach
+ * This implementation calculates the relative frequency of bigrams (word pairs) in the input text.
+ * The stripes approach uses a HashMap to store co-occurring words for each word.
  */
 public class BigramFrequencyStripes extends Configured implements Tool {
 	private static final Logger LOG = Logger
 			.getLogger(BigramFrequencyStripes.class);
 
 	/*
-	 * Mapper: emits <word, stripe> where stripe is a hash map
+	 * Mapper: emits <word, stripe> where stripe is a hash map containing co-occurring words
+	 * For each word pair (w1, w2), it emits (w1, {w2: 1})
 	 */
 	private static class MyMapper extends
 			Mapper<LongWritable, Text, Text, HashMapStringIntWritable> {
@@ -48,22 +51,31 @@ public class BigramFrequencyStripes extends Configured implements Tool {
 		@Override
 		public void map(LongWritable key, Text value, Context context)
 				throws IOException, InterruptedException {
-			String line = value.toString();
+			String line = ((Text) value).toString();
 			String[] words = line.trim().split("\\s+");
 
-			for (int i = 0; i < words.length - 1; i++) {
-				KEY.set(words[i]);
-				STRIPE.clear();
-
-				// Add the next word to the stripe
-				STRIPE.increment(words[i + 1]);
-				context.write(KEY, STRIPE);
+			/*
+			 * TODO: Your implementation goes here.
+			 */
+				for (int i = 0; i < words.length - 1; i++) {
+					String currentWord = words[i];
+					String nextWord = words[i + 1];
+					
+					KEY.set(currentWord);
+					STRIPE.clear();
+					STRIPE.increment(nextWord);
+					
+					context.write(KEY, STRIPE);
+				}
 			}
-		}
 	}
 
 	/*
-	 * Reducer: aggregates all stripes associated with each key
+	 * Reducer: aggregates all stripes associated with each key and calculates relative frequencies
+	 * For each word w1, it:
+	 * 1. Aggregates all stripes containing co-occurring words
+	 * 2. Calculates total occurrences of w1
+	 * 3. Computes relative frequencies for each co-occurring word
 	 */
 	private static class MyReducer extends
 			Reducer<Text, HashMapStringIntWritable, PairOfStrings, FloatWritable> {
@@ -77,28 +89,42 @@ public class BigramFrequencyStripes extends Configured implements Tool {
 		public void reduce(Text key,
 				Iterable<HashMapStringIntWritable> stripes, Context context)
 				throws IOException, InterruptedException {
-			SUM_STRIPES.clear();
-
-			// Aggregate all stripes
-			for (HashMapStringIntWritable stripe : stripes) {
-				SUM_STRIPES.plus(stripe);
-			}
-
-			// Emit each bigram and its frequency
-			int totalCount = 0;
-			for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
-				totalCount += entry.getValue();
-			}
-			for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
-				BIGRAM.set(key.toString(), entry.getKey());
-				FREQ.set((float) entry.getValue() / totalCount);
-				context.write(BIGRAM, FREQ);
-			}
+			/*
+			 * TODO: Your implementation goes here.
+			 */
+				SUM_STRIPES.clear();
+				
+				// Sum all stripes for the current key
+				for (HashMapStringIntWritable stripe : stripes) {
+					SUM_STRIPES.plus(stripe);
+				}
+				
+				// Calculate total count for the current word (sum of all values in the stripe)
+				int total = 0;
+				for (Integer count : SUM_STRIPES.values()) {
+					total += count;
+				}
+				
+				// Output the total count first
+				context.write(new PairOfStrings(key.toString(), ""), new FloatWritable(total));
+				
+				// Calculate and output relative frequencies
+				for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
+					String nextWord = entry.getKey();
+					int count = entry.getValue();
+					float relativeFreq = (float) count / total;
+					
+					BIGRAM.set(key.toString(), nextWord);
+					FREQ.set(relativeFreq);
+					
+					context.write(BIGRAM, FREQ);
+				}
 		}
 	}
 
 	/*
-	 * Combiner: aggregates all stripes with the same key
+	 * Combiner: aggregates stripes locally to reduce network transfer
+	 * Combines multiple stripes for the same word by adding their counts
 	 */
 	private static class MyCombiner
 			extends
@@ -110,15 +136,15 @@ public class BigramFrequencyStripes extends Configured implements Tool {
 		public void reduce(Text key,
 				Iterable<HashMapStringIntWritable> stripes, Context context)
 				throws IOException, InterruptedException {
-			SUM_STRIPES.clear();
-
-			// Aggregate all stripes
-			for (HashMapStringIntWritable stripe : stripes) {
-				SUM_STRIPES.plus(stripe);
-			}
-
-			// Emit the combined stripe
-			context.write(key, SUM_STRIPES);
+			/*
+			 * TODO: Your implementation goes here.
+			 */
+				SUM_STRIPES.clear();
+				for (HashMapStringIntWritable stripe : stripes) {
+					SUM_STRIPES.plus(stripe);
+				}
+				
+				context.write(key, SUM_STRIPES);
 		}
 	}
 
