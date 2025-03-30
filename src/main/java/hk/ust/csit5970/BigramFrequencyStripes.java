@@ -54,7 +54,7 @@ public class BigramFrequencyStripes extends Configured implements Tool {
                 String w2 = words[i + 1];
                 KEY.set(w1);
                 STRIPE.clear();
-                STRIPE.put(w2, 1);
+                STRIPE.increment(w2);
                 context.write(KEY, STRIPE);
             }
         }
