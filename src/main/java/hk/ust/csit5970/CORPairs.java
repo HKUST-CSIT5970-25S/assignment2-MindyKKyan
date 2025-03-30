@@ -23,7 +23,6 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.*;
 
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -33,125 +32,104 @@ import java.util.Arrays;
 import java.util.HashMap;
 
 /**
- * Compute the bigram count using "pairs" approach
+ * Compute the bigram correlation coefficients using "pairs" approach.
+ * This implementation uses a two-pass MapReduce strategy:
+ * 1. First pass: Count individual word frequencies
+ * 2. Second pass: Calculate correlation coefficients using pairs pattern
  */
 public class CORPairs extends Configured implements Tool {
 	private static final Logger LOG = Logger.getLogger(CORPairs.class);
 
 	/*
-	 * TODO: Write your first-pass Mapper here.
+	 * First-pass Mapper: Count individual word frequencies
+	 * Output: (word, 1) for each word occurrence
 	 */
-	private static class CORMapper1 extends
-			Mapper<LongWritable, Text, Text, IntWritable> {
+	private static class CORMapper1 extends Mapper<LongWritable, Text, Text, IntWritable> {
 		@Override
 		public void map(LongWritable key, Text value, Context context)
 				throws IOException, InterruptedException {
-			HashMap<String, Integer> word_set = new HashMap<String, Integer>(); // Fixed line
-			// Please use this tokenizer! DO NOT implement a tokenizer by yourself!
+			// Preprocess text using specified tokenizer
 			String clean_doc = value.toString().replaceAll("[^a-z A-Z]", " ");
 			StringTokenizer doc_tokenizer = new StringTokenizer(clean_doc);
-			/*
-			 * TODO: Your implementation goes here.
-			 */
+			// Output (word,1) for each word
 			while (doc_tokenizer.hasMoreTokens()) {
-                String token = doc_tokenizer.nextToken().trim();
-                if (!token.isEmpty()) {
-                    Integer count = word_set.get(token);
-					if (count == null) {
-						count = 0;
-					}
-					word_set.put(token, count + 1);
-                }
-            }
-            for (Map.Entry<String, Integer> entry : word_set.entrySet()) {
-                context.write(new Text(entry.getKey()), new IntWritable(entry.getValue()));
-            }
+				String word = doc_tokenizer.nextToken().toLowerCase();
+				context.write(new Text(word), new IntWritable(1));
+			}
 		}
 	}
 
 	/*
-	 * TODO: Write your first-pass reducer here.
+	 * First-pass Reducer: Sum up word frequencies
+	 * Output: (word, totalFrequency)
 	 */
-	private static class CORReducer1 extends
-			Reducer<Text, IntWritable, Text, IntWritable> {
+	private static class CORReducer1 extends Reducer<Text, IntWritable, Text, IntWritable> {
 		@Override
 		public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
-			/*
-			 * TODO: Your implementation goes here.
-			 */
 			int sum = 0;
-            for (IntWritable val : values) {
-                sum += val.get();
-            }
-            context.write(key, new IntWritable(sum));
+			for (IntWritable val : values) {
+				sum += val.get();
+			}
+			context.write(key, new IntWritable(sum));
 		}
 	}
 
 
 	/*
-	 * TODO: Write your second-pass Mapper here.
+	 * Second-pass Mapper (Pairs approach):
+	 * For each line, create unique word pairs (A,B) where A < B
+	 * Output: (PairOfStrings(A,B), 1) for each unique co-occurrence
 	 */
 	public static class CORPairsMapper2 extends Mapper<LongWritable, Text, PairOfStrings, IntWritable> {
 		@Override
 		protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
-			// Please use this tokenizer! DO NOT implement a tokenizer by yourself!
-			StringTokenizer doc_tokenizer = new StringTokenizer(value.toString().replaceAll("[^a-z A-Z]", " "));
-			/*
-			 * TODO: Your implementation goes here.
-			 */
-			// HashMap<String, Integer> uniqueWords = new HashMap<String, Integer>();
-            // while (doc_tokenizer.hasMoreTokens()) {
-            //     String token = doc_tokenizer.nextToken().trim();
-            //     if (!token.isEmpty()) {
-            //         uniqueWords.add(token);
-            //     }
-            // }
-			Set<String> uniqueWords = new HashSet<String>();
+			// Preprocess text using tokenizer
+			String clean_doc = value.toString().replaceAll("[^a-z A-Z]", " ");
+			StringTokenizer doc_tokenizer = new StringTokenizer(clean_doc);
+			// Use Set to remove duplicate words
+			Set<String> uniqueWords = new HashSet<>();
 			while (doc_tokenizer.hasMoreTokens()) {
-				String token = doc_tokenizer.nextToken().trim().toLowerCase();
-				if (!token.isEmpty()) {
-					uniqueWords.add(token);
+				uniqueWords.add(doc_tokenizer.nextToken().toLowerCase());
+			}
+			// Convert words to list and sort to ensure fixed order (lexicographically smaller word as left)
+			List<String> wordList = new ArrayList<>(uniqueWords);
+			Collections.sort(wordList);
+			// Create all unique word pairs (A, B) where A < B
+			for (int i = 0; i < wordList.size(); i++) {
+				for (int j = i + 1; j < wordList.size(); j++) {
+					PairOfStrings pair = new PairOfStrings(wordList.get(i), wordList.get(j));
+					context.write(pair, new IntWritable(1));
 				}
 			}
-            // List<String> words = new ArrayList<>(uniqueWords);
-			List<String> words = new ArrayList<String>(uniqueWords);
-            Collections.sort(words);
-            for (int i = 0; i < words.size(); i++) {
-                for (int j = i + 1; j < words.size(); j++) {
-                    String wordA = words.get(i);
-                    String wordB = words.get(j);
-                    context.write(new PairOfStrings(wordA, wordB), new IntWritable(1));
-                }
-            }
 		}
 	}
 
 	/*
-	 * TODO: Write your second-pass Combiner here.
+	 * Second-pass Combiner: Sum up pair counts locally
+	 * Output: (PairOfStrings(A,B), localSum)
 	 */
 	private static class CORPairsCombiner2 extends Reducer<PairOfStrings, IntWritable, PairOfStrings, IntWritable> {
 		@Override
 		protected void reduce(PairOfStrings key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
-			/*
-			 * TODO: Your implementation goes here.
-			 */
 			int sum = 0;
-            for (IntWritable val : values) {
-                sum += val.get();
-            }
-            context.write(key, new IntWritable(sum));
+			for (IntWritable val : values) {
+				sum += val.get();
+			}
+			context.write(key, new IntWritable(sum));
 		}
 	}
 
 	/*
-	 * TODO: Write your second-pass Reducer here.
+	 * Second-pass Reducer: Calculate correlation coefficients
+	 * Uses pre-loaded word frequencies to compute COR(A,B) = Freq(A,B)/(Freq(A)*Freq(B))
+	 * Output: (PairOfStrings(A,B), correlation)
 	 */
 	public static class CORPairsReducer2 extends Reducer<PairOfStrings, IntWritable, PairOfStrings, DoubleWritable> {
 		private final static Map<String, Integer> word_total_map = new HashMap<String, Integer>();
 
 		/*
 		 * Preload the middle result file.
-		 * In the middle result file, each line contains a word and its frequency Freq(A), seperated by "\t"
+		 * Format: word \t frequency
 		 */
 		@Override
 		protected void setup(Context context) throws IOException, InterruptedException {
@@ -159,56 +137,50 @@ public class CORPairs extends Configured implements Tool {
 			Configuration middle_conf = new Configuration();
 			try {
 				FileSystem fs = FileSystem.get(URI.create(middle_result_path.toString()), middle_conf);
-
 				if (!fs.exists(middle_result_path)) {
-					throw new IOException(middle_result_path.toString() + "not exist!");
+					throw new IOException(middle_result_path.toString() + " not exist!");
 				}
-
 				FSDataInputStream in = fs.open(middle_result_path);
 				InputStreamReader inStream = new InputStreamReader(in);
 				BufferedReader reader = new BufferedReader(inStream);
-
-				LOG.info("reading...");
+				LOG.info("Reading middle result...");
 				String line = reader.readLine();
 				String[] line_terms;
 				while (line != null) {
 					line_terms = line.split("\t");
-					word_total_map.put(line_terms[0], Integer.valueOf(line_terms[1]));
-					LOG.info("read one line!");
+					if(line_terms.length >= 2){
+						word_total_map.put(line_terms[0], Integer.valueOf(line_terms[1]));
+					}
 					line = reader.readLine();
 				}
 				reader.close();
-				LOG.info("finished！");
+				LOG.info("Finished reading middle result.");
 			} catch (Exception e) {
 				System.out.println(e.getMessage());
 			}
 		}
 
-		/*
-		 * TODO: write your second-pass Reducer here.
-		 */
 		@Override
 		protected void reduce(PairOfStrings key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
-			/*
-			 * TODO: Your implementation goes here.
-			 */
-			int sum = 0;
-            for (IntWritable val : values) {
-                sum += val.get();
-            }
-            String wordA = key.getLeftElement();
-            String wordB = key.getRightElement();
-            Integer freqA = word_total_map.get(wordA);
-            Integer freqB = word_total_map.get(wordB);
-            if (freqA == null || freqB == null) {
-                LOG.error("Missing frequency for word: " + (freqA == null ? wordA : wordB));
-                return;
-            }
-            double cor = (double) sum / (freqA * freqB);
-            context.write(key, new DoubleWritable(cor));
+			int pairCount = 0;
+			for (IntWritable val : values) {
+				pairCount += val.get();
+			}
+			// Get frequencies for words A and B from pre-loaded word_total_map
+			Integer freqA = word_total_map.get(key.getLeftElement());
+			Integer freqB = word_total_map.get(key.getRightElement());
+			if (freqA == null || freqB == null || freqA == 0 || freqB == 0) {
+				// Skip if frequencies not found
+				return;
+			}
+			double corr = pairCount / (freqA.doubleValue() * freqB.doubleValue());
+			context.write(key, new DoubleWritable(corr));
 		}
 	}
 
+	/*
+	 * Custom partitioner to ensure all pairs with same left word go to same reducer
+	 */
 	private static final class MyPartitioner extends Partitioner<PairOfStrings, FloatWritable> {
 		@Override
 		public int getPartition(PairOfStrings key, FloatWritable value, int numReduceTasks) {
@@ -247,8 +219,7 @@ public class CORPairs extends Configured implements Tool {
 		try {
 			cmdline = parser.parse(options, args);
 		} catch (ParseException exp) {
-			System.err.println("Error parsing command line: "
-					+ exp.getMessage());
+			System.err.println("Error parsing command line: " + exp.getMessage());
 			return -1;
 		}
 
@@ -266,15 +237,14 @@ public class CORPairs extends Configured implements Tool {
 		String middlePath = "mid";
 		String outputPath = cmdline.getOptionValue(OUTPUT);
 
-		int reduceTasks = cmdline.hasOption(NUM_REDUCERS) ? Integer
-				.parseInt(cmdline.getOptionValue(NUM_REDUCERS)) : 1;
+		int reduceTasks = cmdline.hasOption(NUM_REDUCERS) ? Integer.parseInt(cmdline.getOptionValue(NUM_REDUCERS)) : 1;
 
 		LOG.info("Tool: " + CORPairs.class.getSimpleName());
 		LOG.info(" - input path: " + inputPath);
 		LOG.info(" - output path: " + outputPath);
 		LOG.info(" - number of reducers: " + reduceTasks);
 
-		// Setup for the first-pass MapReduce
+		// Setup for the first-pass MapReduce (计算单词频数)
 		Configuration conf1 = new Configuration();
 
 		Job job1 = Job.getInstance(conf1, "Firstpass");
@@ -295,15 +265,13 @@ public class CORPairs extends Configured implements Tool {
 		// Time the program
 		long startTime = System.currentTimeMillis();
 		job1.waitForCompletion(true);
-		LOG.info("Job 1 Finished in " + (System.currentTimeMillis() - startTime)
-				/ 1000.0 + " seconds");
+		LOG.info("Job 1 Finished in " + (System.currentTimeMillis() - startTime) / 1000.0 + " seconds");
 
-		// Setup for the second-pass MapReduce
+		// Setup for the second-pass MapReduce (计算 bigram 的相关系数)
 
 		// Delete the output directory if it exists already.
 		Path outputDir = new Path(outputPath);
 		FileSystem.get(conf1).delete(outputDir, true);
-
 
 		Configuration conf2 = new Configuration();
 		Job job2 = Job.getInstance(conf2, "Secondpass");
@@ -324,8 +292,7 @@ public class CORPairs extends Configured implements Tool {
 		// Time the program
 		startTime = System.currentTimeMillis();
 		job2.waitForCompletion(true);
-		LOG.info("Job 2 Finished in " + (System.currentTimeMillis() - startTime)
-				/ 1000.0 + " seconds");
+		LOG.info("Job 2 Finished in " + (System.currentTimeMillis() - startTime) / 1000.0 + " seconds");
 
 		return 0;
 	}
