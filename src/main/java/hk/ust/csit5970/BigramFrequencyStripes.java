@@ -82,9 +82,10 @@ public class BigramFrequencyStripes extends Configured implements Tool {
                 }
             }
 
+            // Calculate total count by summing all values
             int total = 0;
-            for (int count : SUM_STRIPES.values()) {
-                total += count;
+            for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
+                total += entry.getValue();
             }
 
             // Emit total for A
