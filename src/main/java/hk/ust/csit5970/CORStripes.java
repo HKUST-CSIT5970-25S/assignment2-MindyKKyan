@@ -23,105 +23,81 @@ import java.net.URI;
 import java.util.*;
 
 /**
- * Compute the correlation between words using the "stripes" approach
- * This implementation calculates the correlation between word pairs in the input text.
- * The process is done in two passes:
- * 1. First pass: Count word frequencies
- * 2. Second pass: Calculate correlations using stripes approach
+ * Compute the bigram correlation coefficients using "stripes" approach.
+ * This implementation uses a two-pass MapReduce strategy:
+ * 1. First pass: Count individual word frequencies
+ * 2. Second pass: Calculate correlation coefficients using stripes pattern
  */
 public class CORStripes extends Configured implements Tool {
 	private static final Logger LOG = Logger.getLogger(CORStripes.class);
 
 	/*
-	 * First-pass Mapper: counts word frequencies
-	 * For each document, it:
-	 * 1. Tokenizes the text
-	 * 2. Counts unique words
-	 * 3. Emits <word, count> pairs
+	 * First-pass Mapper: Count individual word frequencies
+	 * Output: (word, 1) for each word occurrence
 	 */
-	private static class CORMapper1 extends
-			Mapper<LongWritable, Text, Text, IntWritable> {
+	private static class CORMapper1 extends Mapper<LongWritable, Text, Text, IntWritable> {
 		@Override
 		public void map(LongWritable key, Text value, Context context)
 				throws IOException, InterruptedException {
-			HashMap<String, Integer> word_set = new HashMap<String, Integer>();
-			// Please use this tokenizer! DO NOT implement a tokenizer by yourself!
-			String clean_doc = value.toString().replaceAll("[^a-z A-Z]", " ");
-			StringTokenizer doc_tokenizer = new StringTokenizer(clean_doc);
-			/*
-			 * TODO: Your implementation goes here.
-			 */
-			while (doc_tokenizer.hasMoreTokens()) {
-                String token = doc_tokenizer.nextToken().trim();
-                if (!token.isEmpty()) {
-                    Integer count = word_set.get(token);
-					if (count == null) {
-						count = 0;
-					}
-					word_set.put(token, count + 1);
-                }
-            }
-            for (Map.Entry<String, Integer> entry : word_set.entrySet()) {
-                context.write(new Text(entry.getKey()), new IntWritable(entry.getValue()));
-            }
+			// Filter non-alphabetic characters using specified tokenizer
+			String cleanDoc = value.toString().replaceAll("[^a-z A-Z]", " ");
+			StringTokenizer tokenizer = new StringTokenizer(cleanDoc);
+			while (tokenizer.hasMoreTokens()) {
+				String word = tokenizer.nextToken().toLowerCase();
+				context.write(new Text(word), new IntWritable(1));
+			}
 		}
 	}
 
 	/*
-	 * First-pass Reducer: aggregates word counts
-	 * Sums up the counts for each word across all documents
+	 * First-pass Reducer: Sum up word frequencies
+	 * Output: (word, totalFrequency)
 	 */
-	private static class CORReducer1 extends
-			Reducer<Text, IntWritable, Text, IntWritable> {
+	private static class CORReducer1 extends Reducer<Text, IntWritable, Text, IntWritable> {
 		@Override
-		public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
-			/*
-			 * TODO: Your implementation goes here.
-			 */
+		public void reduce(Text key, Iterable<IntWritable> values, Context context)
+				throws IOException, InterruptedException {
 			int sum = 0;
-            for (IntWritable val : values) {
-                sum += val.get();
-            }
-            context.write(key, new IntWritable(sum));
+			for (IntWritable val : values) {
+				sum += val.get();
+			}
+			context.write(key, new IntWritable(sum));
 		}
 	}
 
 	/*
-	 * Second-pass Mapper: creates stripes of co-occurring words
-	 * For each document, it:
-	 * 1. Creates a sorted set of unique words
-	 * 2. For each word, creates a stripe of all words that appear after it
-	 * 3. Emits <word, stripe> pairs
+	 * Second-pass Mapper (Stripes approach):
+	 * For each line, create stripes of co-occurring words
+	 * Output: (wordA, stripe) where stripe contains (wordB, 1) for each co-occurrence
 	 */
 	public static class CORStripesMapper2 extends Mapper<LongWritable, Text, Text, MapWritable> {
 		@Override
-		protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
-			Set<String> sorted_word_set = new TreeSet<String>();
-			// Please use this tokenizer! DO NOT implement a tokenizer by yourself!
-			String doc_clean = value.toString().replaceAll("[^a-z A-Z]", " ");
-			StringTokenizer doc_tokenizers = new StringTokenizer(doc_clean);
-			while (doc_tokenizers.hasMoreTokens()) {
-				sorted_word_set.add(doc_tokenizers.nextToken());
+		protected void map(LongWritable key, Text value, Context context)
+				throws IOException, InterruptedException {
+			// Extract unique words and sort them
+			Set<String> sortedSet = new TreeSet<>();
+			String cleanDoc = value.toString().replaceAll("[^a-z A-Z]", " ");
+			StringTokenizer tokenizer = new StringTokenizer(cleanDoc);
+			while (tokenizer.hasMoreTokens()) {
+				sortedSet.add(tokenizer.nextToken().toLowerCase());
 			}
-			// /*
-			//  * TODO: Your implementation goes here.
-			//  */
-			// while (doc_tokenizers.hasMoreTokens()) {
-			// 	String token = doc_tokenizers.nextToken().trim();
-			// 	if (!token.isEmpty()) {
-			// 		sorted_word_set.add(token);
-			// 	}
-			// }
-			
-			List<String> words = new ArrayList<String>(sorted_word_set);
+			// Convert sorted words to list
+			List<String> words = new ArrayList<>(sortedSet);
+			// For each word A, create a stripe to count following words B (A < B to avoid duplicate counting)
 			for (int i = 0; i < words.size(); i++) {
 				String wordA = words.get(i);
 				MapWritable stripe = new MapWritable();
 				for (int j = i + 1; j < words.size(); j++) {
-					String wordB = words.get(j);
-					stripe.put(new Text(wordB), new IntWritable(1));
+					Text wordB = new Text(words.get(j));
+					// Increment count if word exists in stripe, otherwise set to 1
+					if (stripe.containsKey(wordB)) {
+						IntWritable count = (IntWritable) stripe.get(wordB);
+						count.set(count.get() + 1);
+					} else {
+						stripe.put(wordB, new IntWritable(1));
+					}
 				}
-				if (stripe.size() > 0) {
+				if (!stripe.isEmpty()) {
 					context.write(new Text(wordA), stripe);
 				}
 			}
@@ -129,116 +105,97 @@ public class CORStripes extends Configured implements Tool {
 	}
 
 	/*
-	 * Second-pass Combiner: aggregates stripes locally
-	 * Combines multiple stripes for the same word by adding their counts
+	 * Second-pass Combiner: Merge stripes for the same word
+	 * Output: (wordA, mergedStripe) with summed co-occurrence counts
 	 */
 	public static class CORStripesCombiner2 extends Reducer<Text, MapWritable, Text, MapWritable> {
-		static IntWritable ZERO = new IntWritable(0);
-
 		@Override
-		protected void reduce(Text key, Iterable<MapWritable> values, Context context) throws IOException, InterruptedException {
-			/*
-			 * TODO: Your implementation goes here.
-			 */
-			MapWritable combinedStripe = new MapWritable();
+		protected void reduce(Text key, Iterable<MapWritable> values, Context context)
+				throws IOException, InterruptedException {
+			MapWritable combined = new MapWritable();
 			for (MapWritable stripe : values) {
-				for (Map.Entry<Writable, Writable> entry : stripe.entrySet()) {
+				for (MapWritable.Entry<Writable, Writable> entry : stripe.entrySet()) {
 					Text wordB = (Text) entry.getKey();
 					IntWritable count = (IntWritable) entry.getValue();
-					IntWritable existingCount = (IntWritable) combinedStripe.get(wordB);
-					if (existingCount == null) {
-						existingCount = ZERO;
+					if (combined.containsKey(wordB)) {
+						IntWritable existing = (IntWritable) combined.get(wordB);
+						existing.set(existing.get() + count.get());
+					} else {
+						combined.put(new Text(wordB), new IntWritable(count.get()));
 					}
-					combinedStripe.put(wordB, new IntWritable(existingCount.get() + count.get()));
 				}
 			}
-			context.write(key, combinedStripe);
-			}
+			context.write(key, combined);
+		}
 	}
 
 	/*
-	 * Second-pass Reducer: calculates correlations
-	 * For each word pair:
-	 * 1. Loads word frequencies from first pass
-	 * 2. Calculates correlation using the formula: cor(A,B) = freq(A,B) / (freq(A) * freq(B))
+	 * Second-pass Reducer: Calculate correlation coefficients
+	 * Uses pre-loaded word frequencies to compute COR(A,B) = Freq(A,B)/(Freq(A)*Freq(B))
+	 * Output: (PairOfStrings(A,B), correlation)
 	 */
 	public static class CORStripesReducer2 extends Reducer<Text, MapWritable, PairOfStrings, DoubleWritable> {
 		private static Map<String, Integer> word_total_map = new HashMap<String, Integer>();
-		private static IntWritable ZERO = new IntWritable(0);
 
-		/*
-		 * Preload the middle result file.
-		 * In the middle result file, each line contains a word and its frequency Freq(A), seperated by "\t"
-		 */
 		@Override
 		protected void setup(Context context) throws IOException, InterruptedException {
 			Path middle_result_path = new Path("mid/part-r-00000");
 			Configuration middle_conf = new Configuration();
 			try {
 				FileSystem fs = FileSystem.get(URI.create(middle_result_path.toString()), middle_conf);
-
 				if (!fs.exists(middle_result_path)) {
-					throw new IOException(middle_result_path.toString() + "not exist!");
+					throw new IOException(middle_result_path.toString() + " not exist!");
 				}
-
 				FSDataInputStream in = fs.open(middle_result_path);
 				InputStreamReader inStream = new InputStreamReader(in);
 				BufferedReader reader = new BufferedReader(inStream);
-
-				LOG.info("reading...");
+				LOG.info("Reading middle result...");
 				String line = reader.readLine();
-				String[] line_terms;
 				while (line != null) {
-					line_terms = line.split("\t");
-					word_total_map.put(line_terms[0], Integer.valueOf(line_terms[1]));
-					LOG.info("read one line!");
+					String[] tokens = line.split("\t");
+					if(tokens.length >= 2){
+						word_total_map.put(tokens[0], Integer.valueOf(tokens[1]));
+					}
 					line = reader.readLine();
 				}
 				reader.close();
-				LOG.info("finished！");
+				LOG.info("Finished reading middle result.");
 			} catch (Exception e) {
 				System.out.println(e.getMessage());
 			}
 		}
 
-		/*
-		 * TODO: Write your second-pass Reducer here.
-		 */
 		@Override
-		protected void reduce(Text key, Iterable<MapWritable> values, Context context) throws IOException, InterruptedException {
-			/*
-			 * TODO: Your implementation goes here.
-			 */
-			String wordA = key.toString();
-			Integer freqA = word_total_map.get(wordA);
-			if (freqA == null) {
-				return;
-			}
-
-			MapWritable combinedStripe = new MapWritable();
+		protected void reduce(Text key, Iterable<MapWritable> values, Context context)
+				throws IOException, InterruptedException {
+			// Merge multiple stripes for the same key
+			MapWritable combined = new MapWritable();
 			for (MapWritable stripe : values) {
-				for (Map.Entry<Writable, Writable> entry : stripe.entrySet()) {
-					Text wordBText = (Text) entry.getKey();
+				for (MapWritable.Entry<Writable, Writable> entry : stripe.entrySet()) {
+					Text wordB = (Text) entry.getKey();
 					IntWritable count = (IntWritable) entry.getValue();
-					IntWritable existingCount = (IntWritable) combinedStripe.get(wordBText);
-					if (existingCount == null) {
-						existingCount = new IntWritable(0);
+					if (combined.containsKey(wordB)) {
+						IntWritable existing = (IntWritable) combined.get(wordB);
+						existing.set(existing.get() + count.get());
+					} else {
+						combined.put(new Text(wordB), new IntWritable(count.get()));
 					}
-					combinedStripe.put(wordBText, new IntWritable(existingCount.get() + count.get()));
 				}
 			}
-
-			for (Map.Entry<Writable, Writable> entry : combinedStripe.entrySet()) {
-				Text wordBText = (Text) entry.getKey();
-				String wordB = wordBText.toString();
-				int freqAB = ((IntWritable) entry.getValue()).get();
-				Integer freqB = word_total_map.get(wordB);
-				if (freqB == null) {
-					continue;
-				}
-
-				double cor = (double) freqAB / (freqA * freqB);
-				context.write(new PairOfStrings(wordA, wordB), new DoubleWritable(cor));
+			// Get total frequency for current key Freq(A)
+			Integer freqA = word_total_map.get(key.toString());
+			if (freqA == null || freqA == 0) return;
+			// Calculate COR(A, B) for each B in the stripe
+			for (MapWritable.Entry<Writable, Writable> entry : combined.entrySet()) {
+				Text wordB = (Text) entry.getKey();
+				Integer freqB = word_total_map.get(wordB.toString());
+				if (freqB == null || freqB == 0) continue;
+				IntWritable pairCountWritable = (IntWritable) entry.getValue();
+				int pairCount = pairCountWritable.get();
+				double corr = pairCount / (freqA.doubleValue() * freqB.doubleValue());
+				// Output requirement A < B is satisfied as mapper ensures stripe only contains words B lexicographically after A
+				PairOfStrings pair = new PairOfStrings(key.toString(), wordB.toString());
+				context.write(pair, new DoubleWritable(corr));
 			}
 		}
 	}
@@ -273,8 +230,7 @@ public class CORStripes extends Configured implements Tool {
 		try {
 			cmdline = parser.parse(options, args);
 		} catch (ParseException exp) {
-			System.err.println("Error parsing command line: "
-					+ exp.getMessage());
+			System.err.println("Error parsing command line: " + exp.getMessage());
 			return -1;
 		}
 
@@ -292,8 +248,7 @@ public class CORStripes extends Configured implements Tool {
 		String middlePath = "mid";
 		String outputPath = cmdline.getOptionValue(OUTPUT);
 
-		int reduceTasks = cmdline.hasOption(NUM_REDUCERS) ? Integer
-				.parseInt(cmdline.getOptionValue(NUM_REDUCERS)) : 1;
+		int reduceTasks = cmdline.hasOption(NUM_REDUCERS) ? Integer.parseInt(cmdline.getOptionValue(NUM_REDUCERS)) : 1;
 
 		LOG.info("Tool: " + CORStripes.class.getSimpleName());
 		LOG.info(" - input path: " + inputPath);
@@ -301,11 +256,10 @@ public class CORStripes extends Configured implements Tool {
 		LOG.info(" - output path: " + outputPath);
 		LOG.info(" - number of reducers: " + reduceTasks);
 
-		// Setup for the first-pass MapReduce
+		// Setup for the first-pass MapReduce (统计单词频数)
 		Configuration conf1 = new Configuration();
 
 		Job job1 = Job.getInstance(conf1, "Firstpass");
-
 		job1.setJarByClass(CORStripes.class);
 		job1.setMapperClass(CORMapper1.class);
 		job1.setReducerClass(CORReducer1.class);
@@ -315,26 +269,20 @@ public class CORStripes extends Configured implements Tool {
 		FileInputFormat.setInputPaths(job1, new Path(inputPath));
 		FileOutputFormat.setOutputPath(job1, new Path(middlePath));
 
-		// Delete the output directory if it exists already.
+		// 删除已存在的中间结果目录
 		Path middleDir = new Path(middlePath);
 		FileSystem.get(conf1).delete(middleDir, true);
 
-		// Time the program
 		long startTime = System.currentTimeMillis();
 		job1.waitForCompletion(true);
-		LOG.info("Job 1 Finished in " + (System.currentTimeMillis() - startTime)
-				/ 1000.0 + " seconds");
+		LOG.info("Job 1 Finished in " + (System.currentTimeMillis() - startTime) / 1000.0 + " seconds");
 
-		// Setup for the second-pass MapReduce
-
-		// Delete the output directory if it exists already.
+		// Setup for the second-pass MapReduce (计算 COR 值)
 		Path outputDir = new Path(outputPath);
 		FileSystem.get(conf1).delete(outputDir, true);
 
-
 		Configuration conf2 = new Configuration();
 		Job job2 = Job.getInstance(conf2, "Secondpass");
-
 		job2.setJarByClass(CORStripes.class);
 		job2.setMapperClass(CORStripesMapper2.class);
 		job2.setCombinerClass(CORStripesCombiner2.class);
@@ -349,11 +297,9 @@ public class CORStripes extends Configured implements Tool {
 		FileInputFormat.setInputPaths(job2, new Path(inputPath));
 		FileOutputFormat.setOutputPath(job2, new Path(outputPath));
 
-		// Time the program
 		startTime = System.currentTimeMillis();
 		job2.waitForCompletion(true);
-		LOG.info("Job 2 Finished in " + (System.currentTimeMillis() - startTime)
-				/ 1000.0 + " seconds");
+		LOG.info("Job 2 Finished in " + (System.currentTimeMillis() - startTime) / 1000.0 + " seconds");
 
 		return 0;
 	}
