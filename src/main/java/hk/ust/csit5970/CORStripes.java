@@ -75,14 +75,14 @@ public class CORStripes extends Configured implements Tool {
 		protected void map(LongWritable key, Text value, Context context)
 				throws IOException, InterruptedException {
 			// Extract unique words and sort them
-			Set<String> sortedSet = new TreeSet<>();
+			Set<String> sortedSet = new TreeSet<String>();
 			String cleanDoc = value.toString().replaceAll("[^a-z A-Z]", " ");
 			StringTokenizer tokenizer = new StringTokenizer(cleanDoc);
 			while (tokenizer.hasMoreTokens()) {
 				sortedSet.add(tokenizer.nextToken().toLowerCase());
 			}
 			// Convert sorted words to list
-			List<String> words = new ArrayList<>(sortedSet);
+			List<String> words = new ArrayList<String>(sortedSet);
 			// For each word A, create a stripe to count following words B (A < B to avoid duplicate counting)
 			for (int i = 0; i < words.size(); i++) {
 				String wordA = words.get(i);
