@@ -96,7 +96,7 @@ public class BigramFrequencyStripes extends Configured implements Tool {
             // Emit total count for current word (with empty second word)
             BIGRAM.set(key.toString(), "");
             FREQ.set(total);
-            context.write(BGRAM, FREQ);
+            context.write(BIGRAM, FREQ);
 
             // Calculate and emit relative frequencies
             for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
