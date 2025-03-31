@@ -87,12 +87,12 @@ public class CORPairs extends Configured implements Tool {
 			String clean_doc = value.toString().replaceAll("[^a-z A-Z]", " ");
 			StringTokenizer doc_tokenizer = new StringTokenizer(clean_doc);
 			// Use Set to remove duplicate words
-			Set<String> uniqueWords = new HashSet<>();
+			Set<String> uniqueWords = new HashSet<String>();
 			while (doc_tokenizer.hasMoreTokens()) {
 				uniqueWords.add(doc_tokenizer.nextToken().toLowerCase());
 			}
 			// Convert words to list and sort to ensure fixed order (lexicographically smaller word as left)
-			List<String> wordList = new ArrayList<>(uniqueWords);
+			List<String> wordList = new ArrayList<String>(uniqueWords);
 			Collections.sort(wordList);
 			// Create all unique word pairs (A, B) where A < B
 			for (int i = 0; i < wordList.size(); i++) {
